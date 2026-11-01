@@ -1,0 +1,7 @@
+{
+  "layered-image":
+  {
+    "background" : "$media:mojian_icon_bg",
+    "foreground" : "$media:mojian_icon_fg"
+  }
+}

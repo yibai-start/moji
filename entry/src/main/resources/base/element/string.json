@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "墨记 · 笔记与待办"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "墨记主界面"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "墨记"
+    },
+    {
+      "name": "widget_display_name",
+      "value": "今日待办"
+    },
+    {
+      "name": "widget_desc",
+      "value": "在桌面查看今天要完成的待办"
+    }
+  ]
+}

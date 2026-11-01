@@ -1,0 +1,26 @@
+{
+  "color": [
+    { "name": "start_window_background", "value": "#F5F4F2" },
+    { "name": "bg_page", "value": "#F5F4F2" },
+    { "name": "bg_card", "value": "#FFFFFF" },
+    { "name": "text_primary", "value": "#1B1B1F" },
+    { "name": "text_secondary", "value": "#5F5F6B" },
+    { "name": "text_tertiary", "value": "#9696A1" },
+    { "name": "divider", "value": "#E7E5E1" },
+    { "name": "border_soft", "value": "#ECEAE6" },
+    { "name": "accent", "value": "#6E56CF" },
+    { "name": "accent_soft", "value": "#EFECFB" },
+    { "name": "input_bg", "value": "#EFEEEA" },
+    { "name": "chip_bg", "value": "#F1F0EC" },
+    { "name": "danger", "value": "#E5484D" },
+    { "name": "success", "value": "#30A46C" },
+    { "name": "warning", "value": "#F5A524" },
+    { "name": "nav_bg", "value": "#FFFFFF" },
+    { "name": "track", "value": "#E6E4E0" },
+    { "name": "widget_bg", "value": "#FFFFFF" },
+    { "name": "widget_text", "value": "#1B1B1F" },
+    { "name": "widget_sub", "value": "#8A8A95" },
+    { "name": "widget_accent", "value": "#6E56CF" },
+    { "name": "widget_track", "value": "#EEEBF8" }
+  ]
+}
