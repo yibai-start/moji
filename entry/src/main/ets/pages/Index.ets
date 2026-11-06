@@ -873,6 +873,7 @@ struct Index {
         .scrollBar(BarState.Off)
         .padding({ left: 16, right: 16, top: 6 })
         .contentEndOffset(this.listEndOffset())
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
     }
     .width('100%')
@@ -1090,6 +1091,7 @@ struct Index {
         .scrollBar(BarState.Off)
         .padding({ left: 16, right: 16, top: 12 })
         .contentEndOffset(this.listEndOffset())
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
     }
     .width('100%')
@@ -1212,6 +1214,7 @@ struct Index {
       .layoutWeight(1)
       .scrollBar(BarState.Off)
       .width('100%')
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
@@ -1392,6 +1395,7 @@ struct Index {
       .layoutWeight(1)
       .scrollBar(BarState.Off)
       .width('100%')
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
@@ -1964,6 +1968,7 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg_page'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     .bindSheet($$this.showSheet, this.sheetContent(), {
       height: SheetSize.LARGE,
       dragBar: true,
