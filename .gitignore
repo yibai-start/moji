@@ -10,3 +10,5 @@
 /.clang-tidy
 **/.test
 /.appanalyzer
+# AGC config contains client_secret - keep local like signing material
+entry/src/main/resources/rawfile/agconnect-services.json

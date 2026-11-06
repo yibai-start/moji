@@ -18,6 +18,9 @@ import { ReminderService } from '../service/ReminderService';
 import { WidgetService } from '../service/WidgetService';
 import { BackupService } from '../service/BackupService';
 import { ImageService } from '../service/ImageService';
+import { OssConfig, OssService, OssUploadResult } from '../service/OssService';
+import { HuaweiSyncService, HuaweiSyncResult, HwLoginUser } from '../service/HuaweiSyncService';
+import { loginComponentManager, LoginWithHuaweiIDButton, authentication } from '@kit.AccountKit';
 import {
   PRIORITY_COLORS,
   PRIORITY_LABELS,
@@ -60,6 +63,24 @@ struct Index {
   @State ready: boolean = false;
   @State notificationEnabled: boolean = false;
 
+  @State ossEnabled: boolean = false;
+  @State ossEndpoint: string = '';
+  @State ossBucket: string = '';
+  @State ossAccessKeyId: string = '';
+  @State ossAccessKeySecret: string = '';
+  @State ossPathPrefix: string = 'moji/images';
+  @State ossStatus: string = '';
+  @State ossBusy: boolean = false;
+
+  @State hwSignedIn: boolean = false;
+  @State hwUserName: string = '';
+  @State hwSyncEnabled: boolean = false;
+  @State hwStatus: string = '';
+  @State hwBusy: boolean = false;
+  @State hwConfigured: boolean = false;
+  @State hwAnonymousPhone: string = '';
+  @State hwAgreementChecked: boolean = false;
+
   @State showSheet: boolean = false;
   @State sheetMode: number = 0;
   @State editorToken: number = 0;
@@ -96,6 +117,22 @@ struct Index {
   private ctx: common.UIAbilityContext | null = null;
   private tabsController: HdsTabsController = new HdsTabsController();
   private mq: mediaquery.MediaQueryListener = mediaquery.matchMediaSync(`(min-width: ${WIDE_BREAKPOINT}vp)`);
+  private hwLoginController: loginComponentManager.LoginWithHuaweiIDButtonController =
+    new loginComponentManager.LoginWithHuaweiIDButtonController()
+      .setAgreementStatus(loginComponentManager.AgreementStatus.NOT_ACCEPTED)
+      .onClickLoginWithHuaweiIDButton((err: BusinessError | undefined,
+        credential: loginComponentManager.HuaweiIDCredential) => {
+        if (err) {
+          if (err.code === 1005300001) {
+            this.hwAgreementChecked = false;
+          }
+          this.hwStatus = `登录失败：${err.message}`;
+          return;
+        }
+        if (credential) {
+          this.handleHwQuickLogin(credential);
+        }
+      });
   private mqListener: (result: mediaquery.MediaQueryResult) => void =
     (result: mediaquery.MediaQueryResult) => {
       this.isWide = result.matches;
@@ -108,6 +145,8 @@ struct Index {
     this.ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.isWide = this.mq.matches;
     this.mq.on('change', this.mqListener);
+    this.loadOssConfig();
+    this.loadHwState();
     this.initData();
   }
 
@@ -311,6 +350,8 @@ struct Index {
     if (!this.notes.some((item: Note) => item.id === this.selectedNoteId)) {
       this.selectedNoteId = savedId;
     }
+    OssService.syncInBackground(this.context(), note.imageFiles);
+    HuaweiSyncService.syncInBackground(this.context(), note.imageFiles);
     return savedId;
   }
 
@@ -685,6 +726,281 @@ struct Index {
       this.toast('通知已开启');
     } else {
       this.toast('请在系统设置中允许墨记发送通知');
+    }
+  }
+
+  private loadOssConfig(): void {
+    const cfg: OssConfig = OssService.config(this.context());
+    this.ossEnabled = cfg.enabled;
+    this.ossEndpoint = cfg.endpoint;
+    this.ossBucket = cfg.bucket;
+    this.ossAccessKeyId = cfg.accessKeyId;
+    this.ossAccessKeySecret = cfg.accessKeySecret;
+    this.ossPathPrefix = cfg.pathPrefix;
+  }
+
+  private currentOssConfig(): OssConfig {
+    const cfg: OssConfig = new OssConfig();
+    cfg.enabled = this.ossEnabled;
+    cfg.endpoint = this.ossEndpoint;
+    cfg.bucket = this.ossBucket;
+    cfg.accessKeyId = this.ossAccessKeyId;
+    cfg.accessKeySecret = this.ossAccessKeySecret;
+    cfg.pathPrefix = this.ossPathPrefix;
+    return cfg;
+  }
+
+  private ossConfigIncomplete(): boolean {
+    return this.ossEndpoint.trim().length === 0 || this.ossBucket.trim().length === 0 ||
+      this.ossAccessKeyId.trim().length === 0 || this.ossAccessKeySecret.trim().length === 0;
+  }
+
+  private saveOssConfig(): void {
+    if (this.ossEnabled && this.ossConfigIncomplete()) {
+      this.toast('请完整填写 Endpoint、Bucket 和 AccessKey');
+      return;
+    }
+    OssService.saveConfig(this.context(), this.currentOssConfig());
+    this.ossStatus = '配置已保存';
+    this.toast('OSS 配置已保存');
+  }
+
+  private async toggleOss(enabled: boolean): Promise<void> {
+    this.ossEnabled = enabled;
+    if (enabled && this.ossConfigIncomplete()) {
+      this.ossStatus = '请填写并保存配置';
+      return;
+    }
+    OssService.saveConfig(this.context(), this.currentOssConfig());
+    if (enabled) {
+      await this.syncOssNow();
+    }
+  }
+
+  private async testOss(): Promise<void> {
+    if (this.ossBusy || this.ossConfigIncomplete()) {
+      this.toast('请先完整填写配置');
+      return;
+    }
+    this.ossBusy = true;
+    this.ossStatus = '正在测试连接…';
+    try {
+      await OssService.testConnection(this.context(), this.currentOssConfig());
+      this.ossStatus = '连接成功，凭证有效';
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      this.ossStatus = `连接失败：${OssService.errorMessage(e)}`;
+    } finally {
+      this.ossBusy = false;
+    }
+  }
+
+  private async syncOssNow(): Promise<void> {
+    if (this.ossBusy) {
+      return;
+    }
+    if (!OssService.isReady(this.currentOssConfig())) {
+      this.ossStatus = '请先开启并保存完整配置';
+      return;
+    }
+    this.ossBusy = true;
+    this.ossStatus = '正在上传…';
+    try {
+      const result: OssUploadResult = await OssService.uploadPending(this.context(), this.currentOssConfig());
+      if (result.failed > 0) {
+        this.ossStatus = `上传 ${result.ok} 张成功，${result.failed} 张失败：${result.message}`;
+      } else if (result.ok > 0) {
+        this.ossStatus = `本次上传 ${result.ok} 张，云端已同步`;
+      } else {
+        this.ossStatus = `云端已同步，共 ${result.skipped} 张`;
+      }
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      this.ossStatus = `上传失败：${OssService.errorMessage(e)}`;
+    } finally {
+      this.ossBusy = false;
+    }
+  }
+
+  private loadHwState(): void {
+    const ok: boolean = HuaweiSyncService.init(this.context());
+    this.hwConfigured = ok;
+    if (!ok) {
+      return;
+    }
+    this.hwSyncEnabled = HuaweiSyncService.isEnabled(this.context());
+    HuaweiSyncService.restoreLogin(this.context()).then((restored: boolean) => {
+      if (restored) {
+        this.hwSignedIn = true;
+        const user: HwLoginUser | null = HuaweiSyncService.loginUser;
+        if (user !== null) {
+          this.hwUserName = user.displayName.length > 0 ? user.displayName : '华为账号';
+        }
+      } else {
+        HuaweiSyncService.getAnonymousPhone(this.context()).then((phone: string) => {
+          this.hwAnonymousPhone = phone;
+        }).catch(() => undefined);
+      }
+    }).catch(() => undefined);
+  }
+
+  private hwSignedInOrToast(): boolean {
+    if (!this.hwConfigured) {
+      this.toast('请在 AGC 配置 agconnect-services.json 后重试');
+      return false;
+    }
+    if (!this.hwSignedIn) {
+      this.toast('请先登录华为账号');
+      return false;
+    }
+    return true;
+  }
+
+  private async hwSignIn(): Promise<void> {
+    if (this.hwBusy || !this.hwConfigured) {
+      if (!this.hwConfigured) {
+        this.toast('缺少 agconnect-services.json，请先完成 AGC 配置');
+      }
+      return;
+    }
+    this.hwBusy = true;
+    this.hwStatus = '正在拉起华为账号授权…';
+    try {
+      const provider: authentication.HuaweiIDProvider = new authentication.HuaweiIDProvider();
+      const loginRequest: authentication.LoginWithHuaweiIDRequest = provider.createLoginWithHuaweiIDRequest();
+      const controller: authentication.AuthenticationController =
+        new authentication.AuthenticationController(this.context());
+      const response: authentication.LoginWithHuaweiIDResponse =
+        await controller.executeRequest(loginRequest) as authentication.LoginWithHuaweiIDResponse;
+      const credential: loginComponentManager.HuaweiIDCredential =
+        response.data as loginComponentManager.HuaweiIDCredential;
+      const user: HwLoginUser =
+        await HuaweiSyncService.processLogin(credential.authorizationCode, this.context());
+      this.hwSignedIn = true;
+      this.hwUserName = user.displayName.length > 0 ? user.displayName : '华为账号';
+      this.hwStatus = '登录成功';
+      this.toast('华为账号登录成功');
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      this.hwStatus = `登录失败：${HuaweiSyncService.errorMessage(e)}`;
+    } finally {
+      this.hwBusy = false;
+    }
+  }
+
+  private async handleHwQuickLogin(credential: loginComponentManager.HuaweiIDCredential): Promise<void> {
+    if (this.hwBusy) {
+      return;
+    }
+    this.hwBusy = true;
+    this.hwStatus = '正在完成华为账号登录…';
+    try {
+      const user: HwLoginUser =
+        await HuaweiSyncService.processLogin(credential.authorizationCode, this.context());
+      this.hwSignedIn = true;
+      this.hwUserName = user.displayName.length > 0 ? user.displayName : '华为账号';
+      this.hwStatus = '登录成功';
+      this.toast('华为账号登录成功');
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      this.hwStatus = `登录失败：${HuaweiSyncService.errorMessage(e)}`;
+    } finally {
+      this.hwBusy = false;
+    }
+  }
+
+  private async hwSignOut(): Promise<void> {
+    if (this.hwBusy) {
+      return;
+    }
+    try {
+      await HuaweiSyncService.signOut(this.context());
+      this.hwSignedIn = false;
+      this.hwUserName = '';
+      this.hwSyncEnabled = false;
+      HuaweiSyncService.setEnabled(this.context(), false);
+      this.hwStatus = '已退出登录';
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      this.hwStatus = `退出失败：${HuaweiSyncService.errorMessage(e)}`;
+    }
+  }
+
+  private async toggleHw(enabled: boolean): Promise<void> {
+    if (enabled && !this.hwSignedInOrToast()) {
+      return;
+    }
+    this.hwSyncEnabled = enabled;
+    HuaweiSyncService.setEnabled(this.context(), enabled);
+    if (enabled) {
+      await this.hwSyncNow();
+    }
+  }
+
+  private async hwSyncNow(): Promise<void> {
+    if (this.hwBusy || !this.hwSignedInOrToast()) {
+      return;
+    }
+    this.hwBusy = true;
+    this.hwStatus = '正在同步到华为云…';
+    try {
+      const result: HuaweiSyncResult = await HuaweiSyncService.uploadPending(this.context());
+      if (result.failed > 0) {
+        this.hwStatus = `同步 ${result.ok} 项成功，${result.failed} 项失败：${result.message}`;
+      } else if (result.ok > 0) {
+        this.hwStatus = `本次同步 ${result.ok} 项，云端已更新`;
+      } else {
+        this.hwStatus = '云端已是最新';
+      }
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      this.hwStatus = `同步失败：${HuaweiSyncService.errorMessage(e)}`;
+    } finally {
+      this.hwBusy = false;
+    }
+  }
+
+  private confirmHwRestore(): void {
+    if (!this.hwSignedInOrToast()) {
+      return;
+    }
+    this.getUIContext().showAlertDialog({
+      title: '从华为云恢复',
+      message: '恢复会覆盖当前所有笔记、待办和标签，并补齐云端图片，确定继续吗？',
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '恢复',
+        action: () => {
+          this.hwRestore();
+        }
+      }
+    });
+  }
+
+  private async hwRestore(): Promise<void> {
+    if (this.hwBusy) {
+      return;
+    }
+    this.hwBusy = true;
+    this.hwStatus = '正在从华为云恢复…';
+    try {
+      const result: HuaweiSyncResult = await HuaweiSyncService.restore(this.context());
+      if (result.failed > 0) {
+        this.hwStatus = `恢复 ${result.ok} 项，${result.failed} 项失败：${result.message}`;
+      } else {
+        this.hwStatus = `恢复完成，共 ${result.ok} 项`;
+      }
+      await this.reloadAll();
+      this.toast('恢复完成');
+    } catch (err) {
+      const e: BusinessError = err as BusinessError;
+      this.hwStatus = `恢复失败：${HuaweiSyncService.errorMessage(e)}`;
+    } finally {
+      this.hwBusy = false;
     }
   }
 
@@ -1418,6 +1734,289 @@ struct Index {
           .backgroundColor($r('app.color.bg_card'))
           .borderRadius(16)
           .border({ width: 1, color: $r('app.color.border_soft') })
+
+          Column({ space: 10 }) {
+            Row({ space: 10 }) {
+              Image($r('app.media.ic_export'))
+                .width(18)
+                .height(18)
+                .fillColor($r('app.color.accent'))
+              Column({ space: 2 }) {
+                Text('云备份（阿里云 OSS）')
+                  .fontSize(15)
+                  .fontColor($r('app.color.text_primary'))
+                Text(this.ossStatus.length > 0 ? this.ossStatus
+                  : (this.ossEnabled ? '新图片将在保存笔记后自动上传' : '未启用，图片仅保存在本机'))
+                  .fontSize(11)
+                  .fontColor($r('app.color.text_tertiary'))
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.ossEnabled })
+                .selectedColor($r('app.color.accent'))
+                .onChange((on: boolean) => {
+                  this.toggleOss(on);
+                })
+            }
+            .width('100%')
+
+            if (this.ossEnabled) {
+              TextInput({ text: this.ossEndpoint, placeholder: 'Endpoint，如 oss-cn-hangzhou.aliyuncs.com' })
+                .fontSize(13)
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor($r('app.color.bg_page'))
+                .fontColor($r('app.color.text_primary'))
+                .placeholderColor($r('app.color.text_tertiary'))
+                .padding({ left: 12, right: 12 })
+                .onChange((value: string) => {
+                  this.ossEndpoint = value;
+                })
+              TextInput({ text: this.ossBucket, placeholder: 'Bucket 名称，如 moji-notes' })
+                .fontSize(13)
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor($r('app.color.bg_page'))
+                .fontColor($r('app.color.text_primary'))
+                .placeholderColor($r('app.color.text_tertiary'))
+                .padding({ left: 12, right: 12 })
+                .onChange((value: string) => {
+                  this.ossBucket = value;
+                })
+              TextInput({ text: this.ossAccessKeyId, placeholder: 'AccessKeyId（建议 RAM 子账号）' })
+                .fontSize(13)
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor($r('app.color.bg_page'))
+                .fontColor($r('app.color.text_primary'))
+                .placeholderColor($r('app.color.text_tertiary'))
+                .padding({ left: 12, right: 12 })
+                .onChange((value: string) => {
+                  this.ossAccessKeyId = value;
+                })
+              TextInput({ text: this.ossAccessKeySecret, placeholder: 'AccessKeySecret' })
+                .fontSize(13)
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor($r('app.color.bg_page'))
+                .fontColor($r('app.color.text_primary'))
+                .placeholderColor($r('app.color.text_tertiary'))
+                .padding({ left: 12, right: 12 })
+                .type(InputType.Password)
+                .onChange((value: string) => {
+                  this.ossAccessKeySecret = value;
+                })
+              TextInput({ text: this.ossPathPrefix, placeholder: '目录前缀，默认 moji/images' })
+                .fontSize(13)
+                .height(40)
+                .borderRadius(10)
+                .backgroundColor($r('app.color.bg_page'))
+                .fontColor($r('app.color.text_primary'))
+                .placeholderColor($r('app.color.text_tertiary'))
+                .padding({ left: 12, right: 12 })
+                .onChange((value: string) => {
+                  this.ossPathPrefix = value;
+                })
+              Row({ space: 10 }) {
+                Button('保存配置')
+                  .fontSize(12)
+                  .height(32)
+                  .borderRadius(16)
+                  .layoutWeight(1)
+                  .backgroundColor($r('app.color.accent'))
+                  .fontColor(Color.White)
+                  .enabled(!this.ossBusy)
+                  .opacity(this.ossBusy ? 0.5 : 1)
+                  .onClick(() => {
+                    this.saveOssConfig();
+                  })
+                Button('测试连接')
+                  .fontSize(12)
+                  .height(32)
+                  .borderRadius(16)
+                  .layoutWeight(1)
+                  .backgroundColor($r('app.color.bg_page'))
+                  .fontColor($r('app.color.text_secondary'))
+                  .enabled(!this.ossBusy)
+                  .opacity(this.ossBusy ? 0.5 : 1)
+                  .onClick(() => {
+                    this.testOss();
+                  })
+                Button('立即上传全部')
+                  .fontSize(12)
+                  .height(32)
+                  .borderRadius(16)
+                  .layoutWeight(1)
+                  .backgroundColor($r('app.color.bg_page'))
+                  .fontColor($r('app.color.text_secondary'))
+                  .enabled(!this.ossBusy)
+                  .opacity(this.ossBusy ? 0.5 : 1)
+                  .onClick(() => {
+                    this.syncOssNow();
+                  })
+              }
+              .width('100%')
+            }
+          }
+          .width('100%')
+          .padding(16)
+          .backgroundColor($r('app.color.bg_card'))
+          .borderRadius(16)
+          .border({ width: 1, color: $r('app.color.border_soft') })
+          .alignItems(HorizontalAlign.Start)
+
+          Column({ space: 10 }) {
+            Row({ space: 10 }) {
+              Image($r('app.media.ic_export'))
+                .width(18)
+                .height(18)
+                .fillColor($r('app.color.accent'))
+              Column({ space: 2 }) {
+                Text('华为云同步')
+                  .fontSize(15)
+                  .fontColor($r('app.color.text_primary'))
+                Text(this.hwStatus.length > 0 ? this.hwStatus
+                  : (!this.hwConfigured ? '未配置 AGC 服务'
+                    : (!this.hwSignedIn ? '未登录'
+                      : (this.hwSyncEnabled ? '登录后笔记与图片自动同步' : '已登录，开启后自动同步'))))
+                  .fontSize(11)
+                  .fontColor($r('app.color.text_tertiary'))
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.hwSyncEnabled })
+                .selectedColor($r('app.color.accent'))
+                .enabled(this.hwSignedIn)
+                .opacity(this.hwSignedIn ? 1 : 0.4)
+                .onChange((on: boolean) => {
+                  this.toggleHw(on);
+                })
+            }
+            .width('100%')
+
+            if (this.hwConfigured && this.hwSignedIn) {
+              Text(`登录账号：${this.hwUserName.length > 0 ? this.hwUserName : '华为账号'}`)
+                .fontSize(12)
+                .fontColor($r('app.color.text_secondary'))
+                .width('100%')
+              Row({ space: 10 }) {
+                Button('立即同步')
+                  .fontSize(12)
+                  .height(32)
+                  .borderRadius(16)
+                  .layoutWeight(1)
+                  .backgroundColor($r('app.color.accent'))
+                  .fontColor(Color.White)
+                  .enabled(!this.hwBusy)
+                  .opacity(this.hwBusy ? 0.5 : 1)
+                  .onClick(() => {
+                    this.hwSyncNow();
+                  })
+                Button('恢复到本机')
+                  .fontSize(12)
+                  .height(32)
+                  .borderRadius(16)
+                  .layoutWeight(1)
+                  .backgroundColor($r('app.color.bg_page'))
+                  .fontColor($r('app.color.text_secondary'))
+                  .enabled(!this.hwBusy)
+                  .opacity(this.hwBusy ? 0.5 : 1)
+                  .onClick(() => {
+                    this.confirmHwRestore();
+                  })
+                Button('退出登录')
+                  .fontSize(12)
+                  .height(32)
+                  .borderRadius(16)
+                  .layoutWeight(1)
+                  .backgroundColor($r('app.color.bg_page'))
+                  .fontColor($r('app.color.text_secondary'))
+                  .enabled(!this.hwBusy)
+                  .opacity(this.hwBusy ? 0.5 : 1)
+                  .onClick(() => {
+                    this.hwSignOut();
+                  })
+              }
+              .width('100%')
+            } else if (this.hwConfigured) {
+              if (this.hwAnonymousPhone.length > 0) {
+                Text(this.hwAnonymousPhone)
+                  .fontSize(22)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor($r('app.color.text_primary'))
+                  .width('100%')
+                  .textAlign(TextAlign.Center)
+                Text('华为账号绑定号码')
+                  .fontSize(11)
+                  .fontColor($r('app.color.text_tertiary'))
+                  .width('100%')
+                  .textAlign(TextAlign.Center)
+                Row() {
+                  Checkbox({ name: 'hwPrivacy', group: 'hwPrivacyGroup' })
+                    .width(18)
+                    .height(18)
+                    .select(this.hwAgreementChecked)
+                    .onChange((val: boolean) => {
+                      this.hwAgreementChecked = val;
+                      this.hwLoginController.setAgreementStatus(
+                        val ? loginComponentManager.AgreementStatus.ACCEPTED
+                          : loginComponentManager.AgreementStatus.NOT_ACCEPTED
+                      );
+                    })
+                  Text() {
+                    Span('已阅读并同意')
+                      .fontSize(11)
+                      .fontColor($r('app.color.text_tertiary'))
+                    Span('《华为账号用户认证协议》')
+                      .fontSize(11)
+                      .fontColor($r('app.color.accent'))
+                      .decoration({ type: TextDecorationType.Underline })
+                  }
+                }
+                .width('100%')
+                .alignItems(VerticalAlign.Center)
+                .margin({ top: 4 })
+                Column() {
+                  LoginWithHuaweiIDButton({
+                    params: {
+                      style: loginComponentManager.Style.BUTTON_RED,
+                      loginType: loginComponentManager.LoginType.QUICK_LOGIN,
+                      borderRadius: 20,
+                      supportDarkMode: true
+                    },
+                    controller: this.hwLoginController
+                  })
+                }
+                .width('100%')
+                .height(40)
+                .margin({ top: 8 })
+              } else {
+                Button('登录华为账号')
+                  .fontSize(12)
+                  .height(32)
+                  .borderRadius(16)
+                  .width('100%')
+                  .backgroundColor($r('app.color.accent'))
+                  .fontColor(Color.White)
+                  .enabled(!this.hwBusy)
+                  .opacity(this.hwBusy ? 0.5 : 1)
+                  .onClick(() => {
+                    this.hwSignIn();
+                  })
+              }
+            } else {
+              Text('需在 AGC 控制台创建应用并开通云服务后，将 agconnect-services.json 放入工程 rawfile 目录')
+                .fontSize(11)
+                .fontColor($r('app.color.text_tertiary'))
+                .width('100%')
+            }
+          }
+          .width('100%')
+          .padding(16)
+          .backgroundColor($r('app.color.bg_card'))
+          .borderRadius(16)
+          .border({ width: 1, color: $r('app.color.border_soft') })
+          .alignItems(HorizontalAlign.Start)
 
           Column({ space: 10 }) {
             Row() {

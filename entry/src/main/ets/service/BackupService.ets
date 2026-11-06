@@ -37,6 +37,17 @@ export class BackupService {
     return uris[0];
   }
 
+  async exportText(): Promise<string> {
+    const payload: BackupPayload = await this.buildPayload();
+    return JSON.stringify(payload);
+  }
+
+  async importText(text: string): Promise<number> {
+    const payload: BackupPayload = this.parsePayload(text);
+    await this.restore(payload);
+    return payload.notes.length + payload.todos.length + payload.tags.length;
+  }
+
   async importFromFile(context: common.UIAbilityContext): Promise<number> {
     const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
     options.maxSelectNumber = 1;
