@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { mediaquery } from '@kit.ArkUI';
+import { HdsTabs, HdsTabsController, hdsMaterial } from '@kit.UIDesignKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -35,6 +36,13 @@ import { formatDue, formatRelative, isSameDay, nowMs, withAlpha } from '../commo
 
 const DOMAIN: number = 0x0000;
 const LOG_TAG: string = 'Mojian';
+
+// 玻璃导航栏悬浮在内容之上，内容区需要自行避让这些高度。
+const NAV_BAR_HEIGHT: number = 56;
+const NAV_BAR_BOTTOM: number = 12;
+const NAV_OVERLAP: number = NAV_BAR_HEIGHT + NAV_BAR_BOTTOM;
+const FAB_SIZE: number = 56;
+const FAB_GAP: number = 12;
 
 @Entry
 @Component
@@ -85,6 +93,7 @@ struct Index {
   private widgetService: WidgetService = new WidgetService();
   private backupService: BackupService = new BackupService();
   private ctx: common.UIAbilityContext | null = null;
+  private tabsController: HdsTabsController = new HdsTabsController();
   private mq: mediaquery.MediaQueryListener = mediaquery.matchMediaSync(`(min-width: ${WIDE_BREAKPOINT}vp)`);
   private mqListener: (result: mediaquery.MediaQueryResult) => void =
     (result: mediaquery.MediaQueryResult) => {
@@ -862,7 +871,8 @@ struct Index {
         .width('100%')
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        .padding({ left: 16, right: 16, top: 6, bottom: 92 })
+        .padding({ left: 16, right: 16, top: 6 })
+        .contentEndOffset(this.listEndOffset())
       }
     }
     .width('100%')
@@ -1078,7 +1088,8 @@ struct Index {
         .width('100%')
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        .padding({ left: 16, right: 16, top: 12, bottom: 92 })
+        .padding({ left: 16, right: 16, top: 12 })
+        .contentEndOffset(this.listEndOffset())
       }
     }
     .width('100%')
@@ -1195,7 +1206,7 @@ struct Index {
             }, (tag: Tag) => `tag-${tag.id}-${tag.usageCount}-${tag.name}-${tag.color}`)
           }
         }
-        .padding({ left: 16, right: 16, top: 4, bottom: 92 })
+        .padding({ left: 16, right: 16, top: 4, bottom: this.listEndOffset() })
         .width('100%')
       }
       .layoutWeight(1)
@@ -1375,7 +1386,7 @@ struct Index {
           .border({ width: 1, color: $r('app.color.border_soft') })
           .alignItems(HorizontalAlign.Start)
         }
-        .padding({ left: 16, right: 16, top: 4, bottom: 32 })
+        .padding({ left: 16, right: 16, top: 4, bottom: this.isWide ? 32 : NAV_OVERLAP + 20 })
         .width('100%')
       }
       .layoutWeight(1)
@@ -1387,7 +1398,7 @@ struct Index {
   }
 
   @Builder
-  fab() {
+  fab(bottomInset: number) {
     Row() {
       Image($r('app.media.ic_plus'))
         .width(24)
@@ -1399,7 +1410,7 @@ struct Index {
     .borderRadius(28)
     .backgroundColor($r('app.color.accent'))
     .justifyContent(FlexAlign.Center)
-    .margin({ right: 20, bottom: 20 })
+    .margin({ right: 20, bottom: bottomInset })
     .shadow({ radius: 10, color: '#33000000', offsetY: 3 })
     .onClick(() => {
       this.onAddTap();
@@ -1407,7 +1418,7 @@ struct Index {
   }
 
   @Builder
-  bottomItem(index: number, label: string, icon: Resource) {
+  tabBarItem(index: number, label: string, icon: Resource) {
     Column({ space: 3 }) {
       Image(icon)
         .width(21)
@@ -1417,27 +1428,9 @@ struct Index {
         .fontSize(10)
         .fontColor(this.currentTab === index ? $r('app.color.accent') : $r('app.color.text_tertiary'))
     }
-    .layoutWeight(1)
+    .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .onClick(() => {
-      this.currentTab = index;
-    })
-  }
-
-  @Builder
-  bottomBar() {
-    Row() {
-      this.bottomItem(TAB_NOTES, '笔记', $r('app.media.ic_note'))
-      this.bottomItem(TAB_TODOS, '待办', $r('app.media.ic_check_circle'))
-      this.bottomItem(TAB_TAGS, '标签', $r('app.media.ic_tag'))
-      this.bottomItem(TAB_SETTINGS, '我的', $r('app.media.ic_settings'))
-    }
-    .width('100%')
-    .height(58)
-    .backgroundColor($r('app.color.nav_bg'))
-    .border({ width: { top: 1 }, color: $r('app.color.divider') })
-    .padding({ bottom: 4 })
   }
 
   @Builder
@@ -1493,6 +1486,14 @@ struct Index {
     .border({ width: { right: 1 }, color: $r('app.color.divider') })
   }
 
+  private fabInset(): number {
+    return this.isWide ? 20 : NAV_OVERLAP + FAB_GAP;
+  }
+
+  private listEndOffset(): number {
+    return this.fabInset() + FAB_SIZE + FAB_GAP;
+  }
+
   @Builder
   phoneLayout() {
     Column() {
@@ -1510,24 +1511,61 @@ struct Index {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        Stack({ alignContent: Alignment.BottomEnd }) {
-          if (this.currentTab === TAB_NOTES) {
-            this.notesView()
-          } else if (this.currentTab === TAB_TODOS) {
-            this.todosView()
-          } else if (this.currentTab === TAB_TAGS) {
-            this.tagsView()
-          } else {
+        HdsTabs({ controller: this.tabsController }) {
+          TabContent() {
+            Stack({ alignContent: Alignment.BottomEnd }) {
+              this.notesView()
+              this.fab(this.fabInset())
+            }
+            .width('100%')
+            .height('100%')
+          }
+          .tabBar(this.tabBarItem(TAB_NOTES, '笔记', $r('app.media.ic_note')))
+
+          TabContent() {
+            Stack({ alignContent: Alignment.BottomEnd }) {
+              this.todosView()
+              this.fab(this.fabInset())
+            }
+            .width('100%')
+            .height('100%')
+          }
+          .tabBar(this.tabBarItem(TAB_TODOS, '待办', $r('app.media.ic_check_circle')))
+
+          TabContent() {
+            Stack({ alignContent: Alignment.BottomEnd }) {
+              this.tagsView()
+              this.fab(this.fabInset())
+            }
+            .width('100%')
+            .height('100%')
+          }
+          .tabBar(this.tabBarItem(TAB_TAGS, '标签', $r('app.media.ic_tag')))
+
+          TabContent() {
             this.settingsView()
           }
-          if (this.currentTab !== TAB_SETTINGS) {
-            this.fab()
-          }
+          .tabBar(this.tabBarItem(TAB_SETTINGS, '我的', $r('app.media.ic_settings')))
         }
+        .barPosition(BarPosition.End)
+        .barOverlap(true)
+        .barHeight(NAV_BAR_HEIGHT)
+        .barBackgroundColor(Color.Transparent)
+        .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .barFloatingStyle({
+          barSideMargin: 0,
+          barBottomMargin: NAV_BAR_BOTTOM,
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          }
+        })
+        .onChange((index: number) => {
+          this.currentTab = index;
+        })
         .width('100%')
         .layoutWeight(1)
       }
-      this.bottomBar()
     }
     .width('100%')
     .height('100%')
@@ -1555,7 +1593,7 @@ struct Index {
           Row() {
             Stack({ alignContent: Alignment.BottomEnd }) {
               this.notesView()
-              this.fab()
+              this.fab(this.fabInset())
             }
             .width(380)
             .height('100%')
@@ -1583,7 +1621,7 @@ struct Index {
             .constraintSize({ maxWidth: 820 })
 
             if (this.currentTab !== TAB_SETTINGS) {
-              this.fab()
+              this.fab(this.fabInset())
             }
           }
           .width('100%')
