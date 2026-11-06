@@ -98,3 +98,58 @@ export function withAlpha(color: string, alphaHex: string): string {
   }
   return color;
 }
+
+// 图文混排正文：图片以 %%img:文件名%% 标记内嵌在文本中。
+export class NoteSegment {
+  isImage: boolean = false;
+  text: string = '';
+  image: string = '';
+}
+
+export function noteImageNames(content: string): string[] {
+  const result: string[] = [];
+  const re = /%%img:([^%]+)%%/g;
+  let m: RegExpExecArray | null = re.exec(content);
+  while (m !== null) {
+    const name: string = m[1];
+    if (result.indexOf(name) < 0) {
+      result.push(name);
+    }
+    m = re.exec(content);
+  }
+  return result;
+}
+
+export function notePlainText(content: string): string {
+  return content.replace(/%%img:[^%]+%%/g, '');
+}
+
+export function parseNoteContent(content: string): NoteSegment[] {
+  const segments: NoteSegment[] = [];
+  const pushText = (raw: string): void => {
+    if (raw.length > 0) {
+      const seg: NoteSegment = new NoteSegment();
+      seg.text = raw;
+      segments.push(seg);
+    }
+  };
+  const re = /%%img:([^%]+)%%/g;
+  let last = 0;
+  let m: RegExpExecArray | null = re.exec(content);
+  while (m !== null) {
+    pushText(content.substring(last, m.index));
+    const seg: NoteSegment = new NoteSegment();
+    seg.isImage = true;
+    seg.image = m[1];
+    segments.push(seg);
+    last = m.index + m[0].length;
+    m = re.exec(content);
+  }
+  pushText(content.substring(last));
+  return segments;
+}
+
+export function imageFileName(uri: string): string {
+  const slash: number = uri.lastIndexOf('/');
+  return slash < 0 ? uri : uri.substring(slash + 1);
+}

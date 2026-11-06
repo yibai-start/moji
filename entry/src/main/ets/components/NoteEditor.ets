@@ -2,9 +2,11 @@ import { common } from '@kit.AbilityKit';
 import { Tag } from '../model/Models';
 import { TagChip } from './TagChip';
 import { ImageService } from '../service/ImageService';
+import { NoteSegment, noteImageNames, notePlainText, parseNoteContent, imageFileName } from '../common/Utils';
 
-type NoteSaveHandler = (id: number, title: string, content: string, tagIds: number[],
-  images: string[]) => Promise<number>;
+type NoteSaveHandler = (id: number, title: string, content: string, tagIds: number[]) => Promise<number>;
+
+const IMAGE_SPAN_HEIGHT: number = 200;
 
 @Component
 export struct NoteEditor {
@@ -16,18 +18,16 @@ export struct NoteEditor {
   @Prop tags: Tag[] = [];
   @Prop @Watch('handleReset') resetToken: number = 0;
   @Link previewIndex: number;
-  onAutoSave: NoteSaveHandler = async (id: number, title: string, content: string, tagIds: number[],
-    images: string[]): Promise<number> => {
+  onAutoSave: NoteSaveHandler = async (id: number, title: string, content: string,
+    tagIds: number[]): Promise<number> => {
     return id;
   };
-  onSave: NoteSaveHandler = async (id: number, title: string, content: string, tagIds: number[],
-    images: string[]): Promise<number> => {
+  onSave: NoteSaveHandler = async (id: number, title: string, content: string,
+    tagIds: number[]): Promise<number> => {
     return id;
   };
   onPickImages: () => Promise<string[]> = async (): Promise<string[]> => {
     return [];
-  };
-  onRemoveImage: (fileName: string) => void = (fileName: string) => {
   };
   onDelete: (id: number) => void = (id: number) => {
   };
@@ -37,10 +37,12 @@ export struct NoteEditor {
   @State title: string = '';
   @State content: string = '';
   @State tagIds: number[] = [];
-  @State images: string[] = [];
   @State picking: boolean = false;
   @State currentId: number = 0;
   @State saveHint: string = '自动保存已开启';
+  @State previewImages: string[] = [];
+  private controller: RichEditorController = new RichEditorController();
+  private editorReady: boolean = false;
   private timer: number = -1;
   private finished: boolean = false;
 
@@ -64,13 +66,43 @@ export struct NoteEditor {
 
   private resetFromProps(): void {
     this.title = this.initialTitle;
-    this.content = this.initialContent;
+    this.content = this.initialRichContent();
     this.tagIds = this.initialTagIds.slice();
-    this.images = this.initialImages.slice();
     this.currentId = this.noteId;
     this.finished = false;
     this.previewIndex = -1;
+    this.previewImages = [];
     this.saveHint = '自动保存已开启';
+    if (this.editorReady) {
+      this.buildContent();
+    }
+  }
+
+  // 旧版本笔记的图片存在 imageFiles 里、正文是纯文本；
+  // 打开编辑时把它们转换成正文开头的内嵌图片标记，保存后统一为新格式。
+  private initialRichContent(): string {
+    let content: string = this.initialContent;
+    const legacy: string[] = this.initialImages;
+    if (legacy.length > 0 && noteImageNames(content).length === 0) {
+      let markers: string = '';
+      for (const name of legacy) {
+        markers += `%%img:${name}%%\n`;
+      }
+      content = markers + content;
+    }
+    return content;
+  }
+
+  private buildContent(): void {
+    this.controller.deleteSpans();
+    const segments: NoteSegment[] = parseNoteContent(this.content);
+    for (const seg of segments) {
+      if (seg.isImage) {
+        this.appendImageSpan(seg.image, undefined);
+      } else {
+        this.controller.addTextSpan(seg.text);
+      }
+    }
   }
 
   private scheduleAutoSave(): void {
@@ -88,12 +120,12 @@ export struct NoteEditor {
     if (this.finished) {
       return;
     }
-    if (this.title.trim().length === 0 && this.content.trim().length === 0 && this.images.length === 0) {
+    if (this.title.trim().length === 0 && this.content.trim().length === 0) {
       this.saveHint = '自动保存已开启';
       return;
     }
     try {
-      this.currentId = await this.onAutoSave(this.currentId, this.title, this.content, this.tagIds, this.images);
+      this.currentId = await this.onAutoSave(this.currentId, this.title, this.content, this.tagIds);
       this.saveHint = '已自动保存';
     } catch (err) {
       this.saveHint = '保存失败';
@@ -106,7 +138,7 @@ export struct NoteEditor {
       this.timer = -1;
     }
     try {
-      this.currentId = await this.onSave(this.currentId, this.title, this.content, this.tagIds, this.images);
+      this.currentId = await this.onSave(this.currentId, this.title, this.content, this.tagIds);
       this.finished = true;
       this.onClose();
     } catch (err) {
@@ -119,9 +151,9 @@ export struct NoteEditor {
       clearTimeout(this.timer);
       this.timer = -1;
     }
-    if (this.title.trim().length > 0 || this.content.trim().length > 0 || this.images.length > 0) {
+    if (this.title.trim().length > 0 || this.content.trim().length > 0) {
       try {
-        this.currentId = await this.onAutoSave(this.currentId, this.title, this.content, this.tagIds, this.images);
+        this.currentId = await this.onAutoSave(this.currentId, this.title, this.content, this.tagIds);
       } catch (err) {
         this.saveHint = '保存失败';
       }
@@ -180,7 +212,80 @@ export struct NoteEditor {
     return ImageService.displayUri(context, fileName);
   }
 
-  private async addImages(): Promise<void> {
+  private appendImageSpan(fileName: string, offset?: number): void {
+    const options: RichEditorImageSpanOptions = {
+      imageStyle: {
+        size: [344, IMAGE_SPAN_HEIGHT],
+        objectFit: ImageFit.Contain
+      },
+      gesture: {
+        onClick: () => {
+          this.previewImageAt(fileName);
+        }
+      }
+    };
+    if (offset !== undefined) {
+      options.offset = offset;
+    }
+    this.controller.addImageSpan(this.imageUri(fileName), options);
+  }
+
+  // RichEditor 内部把一个图片 span 按 1 个字符计数，与序列化后的标记长度不同，
+  // 所以内部偏移量只能按 span 统计。
+  private editorInternalLength(): number {
+    let length: number = 0;
+    const spans: Array<RichEditorTextSpanResult | RichEditorImageSpanResult> = this.controller.getSpans();
+    for (let i = 0; i < spans.length; i++) {
+      const text = spans[i] as RichEditorTextSpanResult;
+      const image = spans[i] as RichEditorImageSpanResult;
+      if (image.valueResourceStr !== undefined || image.valuePixelMap !== undefined) {
+        length += 1;
+      } else {
+        length += text.value.length;
+      }
+    }
+    return length;
+  }
+
+  private caretInsertPosition(): number {
+    const selection: RichEditorSelection = this.controller.getSelection();
+    if (selection.selection[1] >= 0) {
+      return selection.selection[1];
+    }
+    const caret: number = this.controller.getCaretOffset();
+    if (caret >= 0) {
+      return caret;
+    }
+    return this.editorInternalLength();
+  }
+
+  private serializeContent(): string {
+    let out: string = '';
+    const spans: Array<RichEditorTextSpanResult | RichEditorImageSpanResult> = this.controller.getSpans();
+    for (let i = 0; i < spans.length; i++) {
+      const span = spans[i];
+      const image = span as RichEditorImageSpanResult;
+      if (image.valueResourceStr !== undefined && typeof image.valueResourceStr === 'string'
+        && image.valueResourceStr.length > 0) {
+        out += `%%img:${imageFileName(image.valueResourceStr)}%%`;
+        continue;
+      }
+      const text = span as RichEditorTextSpanResult;
+      out += text.value;
+    }
+    return out;
+  }
+
+  private previewImageAt(fileName: string): void {
+    const images: string[] = noteImageNames(this.content);
+    const index: number = images.indexOf(fileName);
+    if (index >= 0) {
+      this.previewImages = images;
+      this.previewIndex = index;
+    }
+  }
+
+  private async insertImages(): Promise<void> {
     if (this.picking) {
       return;
     }
@@ -188,28 +293,19 @@ export struct NoteEditor {
     try {
       const picked: string[] = await this.onPickImages();
       if (picked.length > 0) {
-        this.images = this.images.concat(picked);
-        this.saveHint = '正在保存…';
-        this.currentId = await this.onAutoSave(this.currentId, this.title, this.content, this.tagIds, this.images);
-        this.saveHint = '已自动保存';
+        let offset: number = this.caretInsertPosition();
+        for (const name of picked) {
+          this.appendImageSpan(name, offset);
+          offset += 1;
+        }
+        this.controller.setCaretOffset(offset);
+        this.content = this.serializeContent();
+        this.scheduleAutoSave();
       }
     } catch (err) {
       this.saveHint = '图片添加失败';
     }
     this.picking = false;
-  }
-
-  private removeImage(index: number): void {
-    const removed: string = this.images[index];
-    const next: string[] = [];
-    for (let i = 0; i < this.images.length; i++) {
-      if (i !== index) {
-        next.push(this.images[i]);
-      }
-    }
-    this.images = next;
-    this.onRemoveImage(removed);
-    this.scheduleAutoSave();
   }
 
   build() {
@@ -288,73 +384,25 @@ export struct NoteEditor {
         .width('100%')
         .padding({ top: 4, bottom: 8 })
 
-        Scroll() {
-          Row({ space: 10 }) {
-            ForEach(this.images, (fileName: string, index: number) => {
-              Stack({ alignContent: Alignment.TopEnd }) {
-                Image(this.imageUri(fileName))
-                  .width(76)
-                  .height(76)
-                  .borderRadius(12)
-                  .objectFit(ImageFit.Cover)
-                  .backgroundColor($r('app.color.input_bg'))
-                Row() {
-                  Image($r('app.media.ic_close'))
-                    .width(11)
-                    .height(11)
-                    .fillColor(Color.White)
-                }
-                .width(20)
-                .height(20)
-                .borderRadius(10)
-                .backgroundColor('#99000000')
-                .justifyContent(FlexAlign.Center)
-                .margin({ top: 4, right: 4 })
-                .onClick(() => {
-                  this.removeImage(index);
-                })
-              }
-              .onClick(() => {
-                this.previewIndex = index;
-              })
-            }, (fileName: string) => fileName)
-
-            Column({ space: 3 }) {
-              Image($r('app.media.ic_plus'))
-                .width(18)
-                .height(18)
-                .fillColor($r('app.color.accent'))
-              Text(this.picking ? '处理中…' : '添加图片')
-                .fontSize(10)
-                .fontColor($r('app.color.text_tertiary'))
-            }
-            .width(76)
-            .height(76)
-            .borderRadius(12)
-            .border({ width: 1, color: $r('app.color.border_soft'), style: BorderStyle.Dashed })
-            .justifyContent(FlexAlign.Center)
-            .onClick(() => {
-              this.addImages();
-            })
-          }
-          .padding({ left: 16, right: 16, top: 2, bottom: 2 })
-        }
-        .scrollable(ScrollDirection.Horizontal)
-        .scrollBar(BarState.Off)
-        .width('100%')
-        .padding({ bottom: 8 })
-
-        TextArea({ text: this.content, placeholder: '开始书写…' })
-          .fontSize(15)
-          .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_tertiary'))
-          .lineHeight(24)
+        RichEditor({ controller: this.controller })
           .backgroundColor(Color.Transparent)
           .padding({ left: 16, right: 16, top: 4, bottom: 12 })
           .layoutWeight(1)
-          .maxLength(100000)
-          .onChange((value: string) => {
-            this.content = value;
+          .placeholder('开始书写…', { fontColor: $r('app.color.text_tertiary') })
+          .onReady(() => {
+            this.editorReady = true;
+            this.controller.setTypingStyle({
+              fontSize: 15,
+              fontColor: $r('app.color.text_primary'),
+              lineHeight: 24
+            });
+            this.buildContent();
+          })
+          .onDidChange(() => {
+            if (!this.editorReady) {
+              return;
+            }
+            this.content = this.serializeContent();
             this.scheduleAutoSave();
           })
 
@@ -362,24 +410,41 @@ export struct NoteEditor {
           .color($r('app.color.divider'))
           .margin({ left: 16, right: 16 })
 
-        Row({ space: 6 }) {
-          Image($r('app.media.ic_trash'))
-            .width(16)
-            .height(16)
-            .fillColor($r('app.color.danger'))
-          Text('删除笔记')
-            .fontSize(13)
-            .fontColor($r('app.color.danger'))
+        Row({ space: 14 }) {
+          Row({ space: 5 }) {
+            Image($r('app.media.ic_image'))
+              .width(16)
+              .height(16)
+              .fillColor($r('app.color.accent'))
+            Text(this.picking ? '处理中…' : '插入图片')
+              .fontSize(13)
+              .fontColor($r('app.color.accent'))
+          }
+          .onClick(() => {
+            this.insertImages();
+          })
+
+          Row({ space: 5 }) {
+            Image($r('app.media.ic_trash'))
+              .width(16)
+              .height(16)
+              .fillColor($r('app.color.danger'))
+            Text('删除笔记')
+              .fontSize(13)
+              .fontColor($r('app.color.danger'))
+          }
+          .onClick(() => {
+            this.confirmDelete();
+          })
+
           Blank()
-          Text(`${this.content.length} 字`)
+
+          Text(`${notePlainText(this.content).length} 字`)
             .fontSize(11)
             .fontColor($r('app.color.text_tertiary'))
         }
         .width('100%')
         .padding({ left: 20, right: 20, top: 12, bottom: 16 })
-        .onClick(() => {
-          this.confirmDelete();
-        })
       }
       .width('100%')
       .height('100%')
@@ -397,7 +462,7 @@ export struct NoteEditor {
   imagePreview() {
     Column() {
       Row({ space: 8 }) {
-        Text(`${this.previewIndex + 1} / ${this.images.length}`)
+        Text(`${this.previewIndex + 1} / ${this.previewImages.length}`)
           .fontSize(13)
           .fontColor(Color.White)
         Blank()
@@ -411,7 +476,7 @@ export struct NoteEditor {
       .padding({ left: 20, right: 14, top: 12, bottom: 6 })
 
       Swiper() {
-        ForEach(this.images, (fileName: string) => {
+        ForEach(this.previewImages, (fileName: string) => {
           Image(this.imageUri(fileName))
             .width('100%')
             .height('100%')
@@ -420,7 +485,7 @@ export struct NoteEditor {
       }
       .index(this.previewIndex < 0 ? 0 : this.previewIndex)
       .loop(false)
-      .indicator(this.images.length > 1)
+      .indicator(this.previewImages.length > 1)
       .layoutWeight(1)
       .onChange((index: number) => {
         this.previewIndex = index;

@@ -1,6 +1,6 @@
 import { Note, Tag } from '../model/Models';
 import { TagChip } from './TagChip';
-import { excerpt, formatRelative } from '../common/Utils';
+import { excerpt, formatRelative, noteImageNames, notePlainText } from '../common/Utils';
 
 @Component
 export struct NoteCard {
@@ -15,10 +15,21 @@ export struct NoteCard {
     return this.note.title.trim().length === 0 ? '无标题笔记' : this.note.title;
   }
 
+  private imageCount(): number {
+    const names: string[] = noteImageNames(this.note.content);
+    let count: number = names.length;
+    for (const name of this.note.imageFiles) {
+      if (names.indexOf(name) < 0) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   private displayExcerpt(): string {
-    const text: string = this.note.content.trim();
+    const text: string = notePlainText(this.note.content).trim();
     if (text.length === 0) {
-      return this.note.imageFiles.length > 0 ? `${this.note.imageFiles.length} 张图片` : '空白笔记';
+      return this.imageCount() > 0 ? `${this.imageCount()} 张图片` : '空白笔记';
     }
     return excerpt(text, 90);
   }
@@ -64,13 +75,13 @@ export struct NoteCard {
             })
           }, (tag: Tag) => `${this.note.id}-${tag.id}-${tag.name}-${tag.color}`)
         }
-        if (this.note.imageFiles.length > 0) {
+        if (this.imageCount() > 0) {
           Row({ space: 3 }) {
             Image($r('app.media.ic_image'))
               .width(12)
               .height(12)
               .fillColor($r('app.color.text_tertiary'))
-            Text(`${this.note.imageFiles.length}`)
+            Text(`${this.imageCount()}`)
               .fontSize(11)
               .fontColor($r('app.color.text_tertiary'))
           }

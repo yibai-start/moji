@@ -32,7 +32,8 @@ import {
   TODO_FILTER_TODAY,
   WIDE_BREAKPOINT
 } from '../common/Constants';
-import { formatDue, formatRelative, isSameDay, nowMs, withAlpha } from '../common/Utils';
+import { formatDue, formatRelative, isSameDay, nowMs, withAlpha, NoteSegment, noteImageNames,
+  notePlainText, parseNoteContent } from '../common/Utils';
 
 const DOMAIN: number = 0x0000;
 const LOG_TAG: string = 'Mojian';
@@ -175,7 +176,7 @@ struct Index {
     const keyword: string = this.searchText.trim().toLowerCase();
     if (keyword.length > 0) {
       result = result.filter((note: Note) =>
-      note.title.toLowerCase().includes(keyword) || note.content.toLowerCase().includes(keyword));
+      note.title.toLowerCase().includes(keyword) || notePlainText(note.content).toLowerCase().includes(keyword));
     }
     return result;
   }
@@ -295,14 +296,13 @@ struct Index {
     }
   }
 
-  private async persistNote(id: number, title: string, content: string, tagIds: number[],
-    images: string[]): Promise<number> {
+  private async persistNote(id: number, title: string, content: string, tagIds: number[]): Promise<number> {
     const existing: Note | undefined = this.notes.find((note: Note) => note.id === id);
     const note: Note = new Note();
     note.id = id;
     note.title = title.trim();
     note.content = content;
-    note.imageFiles = images.slice();
+    note.imageFiles = noteImageNames(content);
     note.pinned = existing === undefined ? false : existing.pinned;
     note.createdAt = existing === undefined ? nowMs() : existing.createdAt;
     note.updatedAt = nowMs();
@@ -314,9 +314,8 @@ struct Index {
     return savedId;
   }
 
-  private async saveNoteAndClose(id: number, title: string, content: string, tagIds: number[],
-    images: string[]): Promise<number> {
-    const savedId: number = await this.persistNote(id, title, content, tagIds, images);
+  private async saveNoteAndClose(id: number, title: string, content: string, tagIds: number[]): Promise<number> {
+    const savedId: number = await this.persistNote(id, title, content, tagIds);
     this.toast('笔记已保存');
     return savedId;
   }
@@ -340,13 +339,47 @@ struct Index {
     this.previewAt = index;
   }
 
-  private removeImageFile(fileName: string): void {
+  // 编辑器关闭后清理孤儿图片：正文里的图片 span 被删掉后，文件不再被任何笔记引用。
+  private pruneOrphanImages(): void {
     try {
-      ImageService.remove(this.context(), fileName);
+      const keep: string[] = [];
+      for (const note of this.notes) {
+        for (const fileName of note.imageFiles) {
+          keep.push(fileName);
+        }
+      }
+      ImageService.prune(this.context(), keep);
     } catch (err) {
       const e = err as BusinessError;
-      hilog.warn(DOMAIN, LOG_TAG, 'remove image failed: %{public}s', e.message);
+      hilog.warn(DOMAIN, LOG_TAG, 'prune images failed: %{public}s', e.message);
     }
+  }
+
+  private previewSegments(): NoteSegment[] {
+    const note: Note = this.selectedNote();
+    if (noteImageNames(note.content).length > 0) {
+      return parseNoteContent(note.content);
+    }
+    // 旧格式：图片独立存放在 imageFiles、正文是纯文本，保持原来的顶部图片列展示。
+    const segments: NoteSegment[] = [];
+    for (const name of note.imageFiles) {
+      const seg: NoteSegment = new NoteSegment();
+      seg.isImage = true;
+      seg.image = name;
+      segments.push(seg);
+    }
+    const textSeg: NoteSegment = new NoteSegment();
+    textSeg.text = note.content;
+    segments.push(textSeg);
+    return segments;
+  }
+
+  private previewImageList(): string[] {
+    const names: string[] = noteImageNames(this.selectedNote().content);
+    if (names.length > 0) {
+      return names;
+    }
+    return this.selectedNote().imageFiles.slice();
   }
 
   private async deleteNoteById(id: number): Promise<void> {
@@ -1007,27 +1040,35 @@ struct Index {
             .width('100%')
             Divider()
               .color($r('app.color.divider'))
-            if (this.selectedNote().imageFiles.length > 0) {
-              Column({ space: 10 }) {
-                ForEach(this.selectedNote().imageFiles, (fileName: string, index: number) => {
-                  Image(ImageService.displayUri(this.context(), fileName))
+            if (this.previewSegments().length > 0) {
+              ForEach(this.previewSegments(), (seg: NoteSegment, index: number) => {
+                if (seg.isImage) {
+                  Image(ImageService.displayUri(this.context(), seg.image))
                     .width('100%')
                     .constraintSize({ maxHeight: 320 })
                     .objectFit(ImageFit.Contain)
                     .borderRadius(12)
                     .backgroundColor($r('app.color.bg_card'))
                     .onClick(() => {
-                      this.openPreview(this.selectedNote().imageFiles, index);
+                      const position: number = this.previewImageList().indexOf(seg.image);
+                      this.openPreview(this.previewImageList(), position);
                     })
-                }, (fileName: string) => `preview-img-${this.selectedNoteId}-${fileName}`)
-              }
-              .width('100%')
+                } else {
+                  Text(seg.text)
+                    .fontSize(15)
+                    .lineHeight(26)
+                    .fontColor($r('app.color.text_primary'))
+                    .width('100%')
+                }
+              }, (seg: NoteSegment, index: number) =>
+                `preview-seg-${this.selectedNoteId}-${index}-${seg.isImage ? seg.image : seg.text.length}`)
+            } else {
+              Text('空白笔记')
+                .fontSize(15)
+                .lineHeight(26)
+                .fontColor($r('app.color.text_tertiary'))
+                .width('100%')
             }
-            Text(this.selectedNote().content.trim().length === 0 ? '空白笔记' : this.selectedNote().content)
-              .fontSize(15)
-              .lineHeight(26)
-              .fontColor($r('app.color.text_primary'))
-              .width('100%')
           }
           .alignItems(HorizontalAlign.Start)
           .padding({ left: 24, right: 24, top: 8, bottom: 24 })
@@ -1684,25 +1725,21 @@ struct Index {
         tags: this.tags,
         resetToken: this.editorToken,
         previewIndex: this.editorPreviewAt,
-        onAutoSave: (id: number, title: string, content: string, tagIds: number[],
-          images: string[]): Promise<number> => {
-          return this.persistNote(id, title, content, tagIds, images);
+        onAutoSave: (id: number, title: string, content: string, tagIds: number[]): Promise<number> => {
+          return this.persistNote(id, title, content, tagIds);
         },
-        onSave: (id: number, title: string, content: string, tagIds: number[],
-          images: string[]): Promise<number> => {
-          return this.saveNoteAndClose(id, title, content, tagIds, images);
+        onSave: (id: number, title: string, content: string, tagIds: number[]): Promise<number> => {
+          return this.saveNoteAndClose(id, title, content, tagIds);
         },
         onPickImages: (): Promise<string[]> => {
           return this.pickImages();
-        },
-        onRemoveImage: (fileName: string) => {
-          this.removeImageFile(fileName);
         },
         onDelete: (id: number) => {
           this.deleteNoteById(id);
         },
         onClose: () => {
           this.showSheet = false;
+          this.pruneOrphanImages();
         }
       })
     } else if (this.sheetMode === 2) {
