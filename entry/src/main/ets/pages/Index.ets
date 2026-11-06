@@ -226,7 +226,7 @@ struct Index {
 
   private headerSubtitle(tab: number): string {
     if (tab === TAB_NOTES) {
-      return this.notes.length === 0 ? '还没有笔记' : `${this.notes.length} 条笔记 · 右滑置顶`;
+      return this.notes.length === 0 ? '还没有笔记' : `${this.notes.length} 条笔记 · 右滑置顶 · 左滑删除`;
     }
     if (tab === TAB_TODOS) {
       return this.todoSubtitle();
@@ -370,8 +370,7 @@ struct Index {
     await this.loadNotes();
   }
 
-  private confirmDeleteSelectedNote(): void {
-    const note: Note = this.selectedNote();
+  private confirmDeleteNote(note: Note): void {
     if (note.id <= 0) {
       return;
     }
@@ -864,6 +863,14 @@ struct Index {
                 onAction: () => {
                   this.applyPinSwipe(note);
                 }
+              },
+              // 删除是破坏性操作，左滑只露出按钮，必须再点一次并确认，
+              // 所以这里故意不写 onAction。
+              end: {
+                builder: () => {
+                  this.deleteSwipeAction(note);
+                },
+                actionAreaDistance: 80
               }
             })
           }, (note: Note) => `${note.id}-${note.updatedAt}-${note.pinned}`)
@@ -907,6 +914,32 @@ struct Index {
     })
   }
 
+  private applyDeleteSwipe(note: Note): void {
+    this.noteListScroller.closeAllSwipeActions();
+    this.confirmDeleteNote(note);
+  }
+
+  @Builder
+  deleteSwipeAction(note: Note) {
+    Row({ space: 6 }) {
+      Image($r('app.media.ic_trash'))
+        .width(18)
+        .height(18)
+        .fillColor(Color.White)
+      Text('删除')
+        .fontSize(13)
+        .fontColor(Color.White)
+    }
+    .width(104)
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.danger'))
+    .borderRadius({ topRight: 16, bottomRight: 16 })
+    .onClick(() => {
+      this.applyDeleteSwipe(note);
+    })
+  }
+
   @Builder
   notePreview() {
     Column() {
@@ -947,7 +980,7 @@ struct Index {
             .fillColor($r('app.color.danger'))
             .padding(6)
             .onClick(() => {
-              this.confirmDeleteSelectedNote();
+              this.confirmDeleteNote(this.selectedNote());
             })
         }
         .width('100%')
