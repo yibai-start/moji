@@ -32,6 +32,12 @@
 - 「今日待办」卡片（2×4），无需打开应用即可查看当天要做的事
 - 由 FormKit 渲染，待办数据变化时应用会主动推送刷新；点击卡片直接打开应用
 
+### 界面与交互
+- 底部导航是自绘的薄玻璃胶囊：背景模糊 + 微亮描边 + 柔和投影，内容从胶囊下透出
+- 四个页签用 `Swiper` 分页承载，切换时左右滑动过渡（300ms），各页滚动位置各自保留
+- 窗口按全屏布局，页面自己留出状态栏与导航条：列表内容一直滚到屏幕物理底边，不再在导航条上方截断留白
+- 智感握姿：支持握持手识别的设备上，悬浮加号自动吸附到拇指一侧，左右切换带弹簧动画；不支持的设备保持右下角
+
 ### 数据与外观
 - 深色模式跟随系统
 - 导出备份：把标签 / 笔记 / 待办写成一个 JSON 文件（`mojian-backup-*.json`）
@@ -49,6 +55,8 @@
 | 提醒 | `@kit.BackgroundTasksKit` agentReminder（需 `ohos.permission.PUBLISH_AGENT_REMINDER`） |
 | 卡片 | FormKit + `EntryFormAbility` / `TodoFormAbility` |
 | 宽屏 | `matchMediaSync` 断点判定，双栏 / 单栏自适应 |
+| 沉浸式 | `setWindowLayoutFullScreen` 全屏布局，避让区高度经 `getWindowAvoidArea` 写入 `AppStorage`，页面自行内边距 |
+| 手势感知 | `@kit.MultimodalAwarenessKit` 的 `holdingHandChanged`，需 `ohos.permission.DETECT_GESTURE`；设备不支持时静默降级 |
 | 依赖 | 无第三方运行时依赖，仅 devDependencies 里的 hypium / hamock 用于测试 |
 
 ## 目录结构
@@ -97,6 +105,15 @@ hdc install -r entry/build/default/outputs/default/entry-default-signed.hap
 - 图片只存在本机沙箱，**不包含在 JSON 备份里**；换设备时图片需要另行迁移。
 - 模拟器的系统相册选图流程无法完成，图片相关功能建议在真机验证。
 - 提醒依赖系统通知权限，未授权时提醒不会展示。
+- 智感握姿依赖设备的 Motion 系统能力（`SystemCapability.MultimodalAwareness.Motion`），不支持时加号固定在右下角。
+
+## 更新记录
+
+### 2026-11-07
+- 底部导航改为自绘薄玻璃胶囊，替换 HdsTabs 的沉浸材质，观感与系统短信菜单一致
+- 页签内容改由 `Swiper` 承载，恢复切换时的左右滑动动画，并各自保留滚动位置
+- 窗口改为全屏布局：笔记 / 待办 / 标签 / 我的 的内容一直滚动到屏幕物理底边，导航条上方不再留空白带
+- 新增智感握姿：识别握持手后新增加号自动吸附到拇指一侧，左右切换带弹簧动画
 
 ## 说明
 
