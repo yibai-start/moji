@@ -42,6 +42,7 @@ const DOMAIN: number = 0x0000;
 const LOG_TAG: string = 'Mojian';
 
 // 玻璃导航栏悬浮在内容之上，内容区需要自行避让这些高度。
+const NAV_BAR_WIDTH: number = 264;
 const NAV_BAR_HEIGHT: number = 56;
 const NAV_BAR_BOTTOM: number = 12;
 const NAV_OVERLAP: number = NAV_BAR_HEIGHT + NAV_BAR_BOTTOM;
@@ -2186,7 +2187,7 @@ struct Index {
       this.tabBarItem(TAB_TAGS, '标签', $r('app.media.ic_tag'))
       this.tabBarItem(TAB_SETTINGS, '我的', $r('app.media.ic_settings'))
     }
-    .width(328)
+    .width(NAV_BAR_WIDTH)
     .height(NAV_BAR_HEIGHT)
     .borderRadius(NAV_BAR_HEIGHT / 2)
     .backgroundEffect({ radius: 14, saturation: 1.2, brightness: 1.0, color: '#12000000' })
