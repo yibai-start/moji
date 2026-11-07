@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
-import { mediaquery } from '@kit.ArkUI';
-import { HdsTabs, HdsTabsController, hdsMaterial } from '@kit.UIDesignKit';
+import { curves, mediaquery } from '@kit.ArkUI';
 import { notificationManager } from '@kit.NotificationKit';
+import { motion } from '@kit.MultimodalAwarenessKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Database } from '../data/Database';
@@ -62,6 +62,7 @@ struct Index {
   @State selectedNoteId: number = -1;
   @State ready: boolean = false;
   @State notificationEnabled: boolean = false;
+  @State fabOnRight: boolean = true;
 
   @State ossEnabled: boolean = false;
   @State ossEndpoint: string = '';
@@ -93,6 +94,8 @@ struct Index {
   @State previewImages: string[] = [];
   @State previewAt: number = -1;
   @State editorPreviewAt: number = -1;
+  @StorageProp('safeTopVp') safeTopVp: number = 0;
+  @StorageProp('safeBottomVp') safeBottomVp: number = 0;
 
   @State todoSheetId: number = 0;
   @State todoTitleInput: string = '';
@@ -115,7 +118,7 @@ struct Index {
   private widgetService: WidgetService = new WidgetService();
   private backupService: BackupService = new BackupService();
   private ctx: common.UIAbilityContext | null = null;
-  private tabsController: HdsTabsController = new HdsTabsController();
+  private swiperController: SwiperController = new SwiperController();
   private mq: mediaquery.MediaQueryListener = mediaquery.matchMediaSync(`(min-width: ${WIDE_BREAKPOINT}vp)`);
   private hwLoginController: loginComponentManager.LoginWithHuaweiIDButtonController =
     new loginComponentManager.LoginWithHuaweiIDButtonController()
@@ -140,11 +143,21 @@ struct Index {
         this.selectedNoteId = this.notes[0].id;
       }
     };
+  private fabHasAppeared: boolean = false;
+  private holdingHandListener: (status: motion.HoldingHandStatus) => void =
+    (status: motion.HoldingHandStatus) => {
+      if (status === motion.HoldingHandStatus.LEFT_HAND_HELD) {
+        this.fabOnRight = false;
+      } else if (status === motion.HoldingHandStatus.RIGHT_HAND_HELD) {
+        this.fabOnRight = true;
+      }
+    };
 
   aboutToAppear(): void {
     this.ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.isWide = this.mq.matches;
     this.mq.on('change', this.mqListener);
+    this.subscribeHoldingHand();
     this.loadOssConfig();
     this.loadHwState();
     this.initData();
@@ -152,6 +165,32 @@ struct Index {
 
   aboutToDisappear(): void {
     this.mq.off('change', this.mqListener);
+    this.unsubscribeHoldingHand();
+  }
+
+  // 智感握姿依赖硬件，不支持的设备（801）静默降级，加号保持右下角。
+  private subscribeHoldingHand(): void {
+    if (!canIUse('SystemCapability.MultimodalAwareness.Motion')) {
+      return;
+    }
+    try {
+      motion.on('holdingHandChanged', this.holdingHandListener);
+    } catch (err) {
+      const error = err as BusinessError;
+      hilog.warn(DOMAIN, LOG_TAG, 'holdingHandChanged on failed: %{public}d', error.code);
+    }
+  }
+
+  private unsubscribeHoldingHand(): void {
+    if (!canIUse('SystemCapability.MultimodalAwareness.Motion')) {
+      return;
+    }
+    try {
+      motion.off('holdingHandChanged', this.holdingHandListener);
+    } catch (err) {
+      const error = err as BusinessError;
+      hilog.warn(DOMAIN, LOG_TAG, 'holdingHandChanged off failed: %{public}d', error.code);
+    }
   }
 
   private context(): common.UIAbilityContext {
@@ -1229,7 +1268,6 @@ struct Index {
         .scrollBar(BarState.Off)
         .padding({ left: 16, right: 16, top: 6 })
         .contentEndOffset(this.listEndOffset())
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
     }
     .width('100%')
@@ -1481,7 +1519,6 @@ struct Index {
         .scrollBar(BarState.Off)
         .padding({ left: 16, right: 16, top: 12 })
         .contentEndOffset(this.listEndOffset())
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
     }
     .width('100%')
@@ -1604,7 +1641,6 @@ struct Index {
       .layoutWeight(1)
       .scrollBar(BarState.Off)
       .width('100%')
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
@@ -2068,7 +2104,6 @@ struct Index {
       .layoutWeight(1)
       .scrollBar(BarState.Off)
       .width('100%')
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
@@ -2076,21 +2111,47 @@ struct Index {
 
   @Builder
   fab(bottomInset: number) {
-    Row() {
-      Image($r('app.media.ic_plus'))
-        .width(24)
-        .height(24)
-        .fillColor(Color.White)
+    if (this.fabOnRight) {
+      this.fabSide(bottomInset, FlexAlign.End, TransitionEdge.END)
+    } else {
+      this.fabSide(bottomInset, FlexAlign.Start, TransitionEdge.START)
     }
-    .width(56)
-    .height(56)
-    .borderRadius(28)
-    .backgroundColor($r('app.color.accent'))
-    .justifyContent(FlexAlign.Center)
-    .margin({ right: 20, bottom: bottomInset })
-    .shadow({ radius: 10, color: '#33000000', offsetY: 3 })
-    .onClick(() => {
-      this.onAddTap();
+  }
+
+  // 智感握姿：左右两个分支条件渲染，切换时旧按钮沿当前侧滑出、新按钮从对侧滑入。
+  @Builder
+  fabSide(bottomInset: number, align: FlexAlign, edge: TransitionEdge) {
+    Row() {
+      Row() {
+        Image($r('app.media.ic_plus'))
+          .width(24)
+          .height(24)
+          .fillColor(Color.White)
+      }
+      .width(56)
+      .height(56)
+      .borderRadius(28)
+      .backgroundColor($r('app.color.accent'))
+      .justifyContent(FlexAlign.Center)
+      .shadow({ radius: 10, color: '#33000000', offsetY: 3 })
+      .onClick(() => {
+        this.onAddTap();
+      })
+    }
+    .width('100%')
+    .padding({ left: 20, right: 20 })
+    .margin({ bottom: bottomInset })
+    .justifyContent(align)
+    .hitTestBehavior(HitTestMode.Transparent)
+    .transition(
+      TransitionEffect.move(edge)
+        .animation({
+          curve: this.fabHasAppeared ? curves.interpolatingSpring(0, 1, 170, 17) :
+            curves.interpolatingSpring(0, 1, 200, 17)
+        })
+    )
+    .onAppear(() => {
+      this.fabHasAppeared = true;
     })
   }
 
@@ -2105,9 +2166,33 @@ struct Index {
         .fontSize(10)
         .fontColor(this.currentTab === index ? $r('app.color.accent') : $r('app.color.text_tertiary'))
     }
-    .width('100%')
+    .layoutWeight(1)
     .height('100%')
     .justifyContent(FlexAlign.Center)
+    .onClick(() => {
+      if (this.currentTab !== index) {
+        this.currentTab = index;
+        this.swiperController.changeIndex(index, true);
+      }
+    })
+  }
+
+  // 与系统短信菜单同类的薄玻璃：模糊 + 微亮描边 + 投影，内容从胶囊下透出。
+  @Builder
+  glassNavBar() {
+    Row() {
+      this.tabBarItem(TAB_NOTES, '笔记', $r('app.media.ic_note'))
+      this.tabBarItem(TAB_TODOS, '待办', $r('app.media.ic_check_circle'))
+      this.tabBarItem(TAB_TAGS, '标签', $r('app.media.ic_tag'))
+      this.tabBarItem(TAB_SETTINGS, '我的', $r('app.media.ic_settings'))
+    }
+    .width(328)
+    .height(NAV_BAR_HEIGHT)
+    .borderRadius(NAV_BAR_HEIGHT / 2)
+    .backgroundEffect({ radius: 14, saturation: 1.2, brightness: 1.0, color: '#12000000' })
+    .border({ width: 1, color: '#80FFFFFF' })
+    .shadow({ radius: 24, color: '#26000000', offsetY: 10 })
+    .margin({ bottom: this.safeBottomVp + NAV_BAR_BOTTOM })
   }
 
   @Builder
@@ -2168,7 +2253,8 @@ struct Index {
   }
 
   private listEndOffset(): number {
-    return this.fabInset() + FAB_SIZE + FAB_GAP;
+    // 手机端内容一直滚到屏幕底边，悬浮胶囊和加号压在内容之上。
+    return this.isWide ? this.fabInset() + FAB_SIZE + FAB_GAP : 0;
   }
 
   @Builder
@@ -2188,64 +2274,41 @@ struct Index {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        HdsTabs({ controller: this.tabsController }) {
-          TabContent() {
-            Stack({ alignContent: Alignment.BottomEnd }) {
+        Stack({ alignContent: Alignment.Bottom }) {
+          Stack({ alignContent: Alignment.BottomEnd }) {
+            Swiper(this.swiperController) {
               this.notesView()
-              this.fab(this.fabInset())
-            }
-            .width('100%')
-            .height('100%')
-          }
-          .tabBar(this.tabBarItem(TAB_NOTES, '笔记', $r('app.media.ic_note')))
-
-          TabContent() {
-            Stack({ alignContent: Alignment.BottomEnd }) {
               this.todosView()
-              this.fab(this.fabInset())
-            }
-            .width('100%')
-            .height('100%')
-          }
-          .tabBar(this.tabBarItem(TAB_TODOS, '待办', $r('app.media.ic_check_circle')))
-
-          TabContent() {
-            Stack({ alignContent: Alignment.BottomEnd }) {
               this.tagsView()
-              this.fab(this.fabInset())
+              this.settingsView()
             }
+            .indicator(false)
+            .loop(false)
+            .duration(300)
+            .curve(Curve.EaseInOut)
+            .cachedCount(2)
+            .onChange((index: number) => {
+              this.currentTab = index;
+            })
             .width('100%')
             .height('100%')
-          }
-          .tabBar(this.tabBarItem(TAB_TAGS, '标签', $r('app.media.ic_tag')))
 
-          TabContent() {
-            this.settingsView()
+            if (this.currentTab !== TAB_SETTINGS) {
+              this.fab(this.fabInset() + this.safeBottomVp)
+            }
           }
-          .tabBar(this.tabBarItem(TAB_SETTINGS, '我的', $r('app.media.ic_settings')))
+          .width('100%')
+          .height('100%')
+
+          this.glassNavBar()
         }
-        .barPosition(BarPosition.End)
-        .barOverlap(true)
-        .barHeight(NAV_BAR_HEIGHT)
-        .barBackgroundColor(Color.Transparent)
-        .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .barFloatingStyle({
-          barSideMargin: 0,
-          barBottomMargin: NAV_BAR_BOTTOM,
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.ADAPTIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-          }
-        })
-        .onChange((index: number) => {
-          this.currentTab = index;
-        })
         .width('100%')
         .layoutWeight(1)
       }
     }
     .width('100%')
     .height('100%')
+    .padding({ top: this.safeTopVp })
   }
 
   @Builder
@@ -2270,7 +2333,7 @@ struct Index {
           Row() {
             Stack({ alignContent: Alignment.BottomEnd }) {
               this.notesView()
-              this.fab(this.fabInset())
+              this.fab(this.fabInset() + this.safeBottomVp)
             }
             .width(380)
             .height('100%')
@@ -2298,7 +2361,7 @@ struct Index {
             .constraintSize({ maxWidth: 820 })
 
             if (this.currentTab !== TAB_SETTINGS) {
-              this.fab(this.fabInset())
+              this.fab(this.fabInset() + this.safeBottomVp)
             }
           }
           .width('100%')
@@ -2310,6 +2373,7 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    .padding({ top: this.safeTopVp, bottom: this.safeBottomVp })
   }
 
   @Builder
@@ -2625,6 +2689,12 @@ struct Index {
 
   build() {
     Stack() {
+      // 底色层：铺进状态栏和导航条避让区，避免上下两端露出窗口白底。
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor($r('app.color.bg_page'))
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       if (this.isWide) {
         this.wideLayout()
       } else {
@@ -2637,7 +2707,6 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg_page'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     .bindSheet($$this.showSheet, this.sheetContent(), {
       height: SheetSize.LARGE,
       dragBar: true,

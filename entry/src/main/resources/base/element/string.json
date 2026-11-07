@@ -19,6 +19,10 @@
     {
       "name": "widget_desc",
       "value": "在桌面查看今天要完成的待办"
+    },
+    {
+      "name": "gesture_reason",
+      "value": "识别握持手，将新建按钮移到拇指可达的一侧"
     }
   ]
 }
